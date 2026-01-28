@@ -2,51 +2,52 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <title>CS WebGL - Full</title>
+    <title>CS 1.6 WebGL</title>
     <style>
-        body { margin: 0; overflow: hidden; background: #000; font-family: Arial, sans-serif; user-select: none; }
+        body { margin: 0; overflow: hidden; background: #000; font-family: 'Courier New', sans-serif; user-select: none; }
         
-        /* Прицел */
+        /* Прицел как в CS 1.6 */
         #crosshair {
             position: absolute; top: 50%; left: 50%;
-            width: 8px; height: 8px;
-            background: transparent; border: 2px solid #0f0; border-radius: 50%;
-            transform: translate(-50%, -50%); pointer-events: none; z-index: 10;
+            width: 0; height: 0;
+            transform: translate(-50%, -50%);
+            z-index: 10;
         }
+        /* Линии прицела */
+        .ch-line { position: absolute; background-color: #0f0; }
+        .ch-h { width: 14px; height: 2px; left: -7px; top: -1px; }
+        .ch-v { width: 2px; height: 14px; left: -1px; top: -7px; }
 
-        /* Инструкция по центру */
-        #instructions {
-            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            color: white; background: rgba(0,0,0,0.7); padding: 20px; border: 1px solid white;
-            text-align: center; cursor: pointer; z-index: 20;
-        }
-
-        /* Интерфейс патронов */
-        #ammo-box {
-            position: absolute; bottom: 20px; right: 20px;
-            color: #ffcc00; font-size: 40px; font-weight: bold;
+        /* Интерфейс */
+        #hud {
+            position: absolute; bottom: 10px; width: 100%;
+            display: flex; justify-content: space-between; padding: 0 20px; box-sizing: border-box;
+            color: #ffcc00; font-weight: bold; font-size: 24px; pointer-events: none;
             text-shadow: 2px 2px 0 #000;
-            font-family: 'Courier New', Courier, monospace;
-            pointer-events: none;
         }
-        #ammo-icon { font-size: 20px; color: #fff; }
+        #msg {
+            position: absolute; top: 40%; width: 100%; text-align: center;
+            color: white; background: rgba(0,0,0,0.5); font-size: 20px; padding: 10px;
+        }
     </style>
 </head>
 <body>
 
-    <div id="crosshair"></div>
-    <div id="instructions">
-        <h1>COUNTER-STRIKE WEB</h1>
-        <p>Кликни сюда, чтобы начать</p>
-        <p>WASD - ходить | R - перезарядка | ЛКМ - огонь</p>
-    </div>
-    
-    <div id="ammo-box">
-        <span id="current-ammo">30</span> / <span id="total-ammo">90</span>
-        <div id="ammo-icon">|||</div>
+    <!-- Прицел -->
+    <div id="crosshair">
+        <div class="ch-line ch-h"></div>
+        <div class="ch-line ch-v"></div>
     </div>
 
-    <!-- Библиотеки -->
+    <!-- Сообщения -->
+    <div id="msg">Кликни, чтобы играть</div>
+
+    <!-- HUD -->
+    <div id="hud">
+        <div id="health">+ 100</div>
+        <div id="ammo"><span id="ammo-val">30</span> / 90</div>
+    </div>
+
     <script type="importmap">
         {
             "imports": {
@@ -61,212 +62,227 @@
         import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
         import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
 
-        let camera, scene, renderer, controls, weapon;
+        // === ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ===
+        let camera, scene, renderer, controls;
+        let weapon, bulletModel;
+        let bullets = [];
+        let bots = []; // Массив врагов и друзей
         
-        // Переменные движения
         let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
         let prevTime = performance.now();
         const velocity = new THREE.Vector3();
         const direction = new THREE.Vector3();
 
-        // Переменные оружия
-        const MAX_MAGAZINE = 30;
-        let ammo = MAX_MAGAZINE;
+        let ammo = 30;
         let isReloading = false;
-        
-        // Начальная позиция оружия (чтобы возвращаться к ней после отдачи)
-        // ТУТ НАСТРОЙКИ ПОЗИЦИИ:
-        const weaponBasePos = { x: 0.4, y: -0.6, z: -0.8 }; 
+
+        // Позиция как в CS 1.6 (справа сбоку)
+        // X: Вправо, Y: Вниз, Z: Вперед от камеры
+        const WEAPON_POS = { x: 0.5, y: -0.6, z: -1.0 }; 
 
         init();
         animate();
 
         function init() {
-            // 1. Сцена
+            // 1. СЦЕНА
             scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x87CEEB);
-            scene.fog = new THREE.Fog(0x87CEEB, 0, 100);
-
-            // 2. Камера
-            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-            camera.position.y = 1.6;
-
-            // 3. Свет
-            const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 2);
-            scene.add(hemiLight);
-            const dirLight = new THREE.DirectionalLight(0xffffff, 2);
-            dirLight.position.set(5, 10, 7);
-            scene.add(dirLight);
-
-            // 4. Пол (В будущем заменишь это на карту)
-            const floor = new THREE.Mesh(
-                new THREE.PlaneGeometry(200, 200),
-                new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.8 })
-            );
+            scene.background = new THREE.Color(0x88CCFF); // Светлое небо
+            // Пол (Dust style)
+            const floorGeo = new THREE.PlaneGeometry(100, 100);
+            const floorMat = new THREE.MeshStandardMaterial({ color: 0xDDCBAA }); // Песочный цвет
+            const floor = new THREE.Mesh(floorGeo, floorMat);
             floor.rotation.x = -Math.PI / 2;
             scene.add(floor);
 
-            // 5. Управление
-            controls = new PointerLockControls(camera, document.body);
-            
-            const blocker = document.getElementById('instructions');
-            blocker.addEventListener('click', () => controls.lock());
+            // Стены (для ориентации)
+            const wallGeo = new THREE.BoxGeometry(10, 5, 10);
+            const wallMat = new THREE.MeshStandardMaterial({ color: 0xCCBB99 });
+            const box = new THREE.Mesh(wallGeo, wallMat);
+            box.position.set(0, 2.5, -20);
+            scene.add(box);
 
-            controls.addEventListener('lock', () => { blocker.style.display = 'none'; });
-            controls.addEventListener('unlock', () => { blocker.style.display = 'block'; });
+            // 2. КАМЕРА
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.y = 1.6; // Рост игрока
 
-            // 6. Загрузка оружия
+            // 3. СВЕТ
+            const ambient = new THREE.AmbientLight(0xffffff, 0.8);
+            scene.add(ambient);
+            const sun = new THREE.DirectionalLight(0xffffff, 1.5);
+            sun.position.set(10, 20, 10);
+            scene.add(sun);
+
+            // 4. ЗАГРУЗКА МОДЕЛЕЙ
             const loader = new GLTFLoader();
+
+            // -- ОРУЖИЕ --
             loader.load('ark47.glb', function (gltf) {
                 weapon = gltf.scene;
                 camera.add(weapon);
                 
-                // --- НАСТРОЙКИ МОДЕЛИ (ОБНОВЛЕННЫЕ) ---
-                
-                // Позиция
-                weapon.position.set(weaponBasePos.x, weaponBasePos.y, weaponBasePos.z);
-                
-                // Поворот: Попробуем повернуть на 90 градусов (PI/2). 
-                // Если смотрит не туда, меняй на 0 или -Math.PI/2
-                weapon.rotation.set(0, Math.PI / 2, 0); 
-                
-                // Масштаб: Делаем БОЛЬШИМ
-                weapon.scale.set(3.5, 3.5, 3.5); 
-                
-                // --------------------------------------
+                // НАСТРОЙКИ CS 1.6
+                weapon.position.set(WEAPON_POS.x, WEAPON_POS.y, WEAPON_POS.z);
+                weapon.rotation.set(0, Math.PI, 0); // Дуло вперед
+                weapon.scale.set(15.0, 15.0, 15.0); // ОЧЕНЬ БОЛЬШОЕ
 
-            }, undefined, function (error) {
-                console.error(error);
-                alert("Ошибка загрузки модели! Проверь имя файла ark47.glb");
+            }, undefined, function(e) { console.error("Ошибка ARK47:", e); });
+
+            // -- ПУЛЯ --
+            loader.load('pyli.glb', function (gltf) {
+                bulletModel = gltf.scene;
+                bulletModel.scale.set(2, 2, 2); // Размер пули
+            }, undefined, function(e) { console.error("Ошибка PYLI:", e); });
+
+            // 5. СОЗДАНИЕ БОТОВ (ЦИЛИНДРЫ)
+            createBots();
+
+            // 6. УПРАВЛЕНИЕ
+            controls = new PointerLockControls(camera, document.body);
+            document.addEventListener('click', () => {
+                if(!controls.isLocked) {
+                    controls.lock();
+                    document.getElementById('msg').style.display = 'none';
+                } else {
+                    shoot(); // Если уже захвачен курсор - стреляем
+                }
             });
 
-            // Рендерер
-            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer = new THREE.WebGLRenderer({ antialias: false }); // False для стиля "ретро"
             renderer.setSize(window.innerWidth, window.innerHeight);
             document.body.appendChild(renderer.domElement);
-            
-            // Обработчики событий
-            document.addEventListener('keydown', onKeyDown);
-            document.addEventListener('keyup', onKeyUp);
-            window.addEventListener('mousedown', onShoot); // Стрельба
-            window.addEventListener('resize', onResize);
+
+            // Клавиши
+            document.addEventListener('keydown', (e) => onKey(e, true));
+            document.addEventListener('keyup', (e) => onKey(e, false));
+            document.addEventListener('keydown', (e) => { if(e.code === 'KeyR') reload(); });
         }
 
-        // --- ЛОГИКА СТРЕЛЬБЫ ---
-        function onShoot() {
-            if (!controls.isLocked || isReloading || !weapon) return;
-
-            if (ammo > 0) {
-                // 1. Тратим патрон
-                ammo--;
-                updateAmmoUI();
-
-                // 2. Отдача (Оружие дергается назад и вверх)
-                weapon.position.z += 0.15; 
-                weapon.position.y += 0.05;
-                weapon.rotation.z += 0.05;
-
-                // 3. Отдача камеры (Тряска экрана)
-                camera.rotation.x += 0.02; 
-            } else {
-                // Нет патронов (щелчок)
-                reload();
+        function createBots() {
+            // Создаем 5 врагов (Красные)
+            for(let i=0; i<5; i++) {
+                spawnBot(0xff0000, 'enemy', -10 + i*5, -20);
+            }
+            // Создаем 3 тимейтов (Синие)
+            for(let i=0; i<3; i++) {
+                spawnBot(0x0000ff, 'friend', -5 + i*5, 5);
             }
         }
 
-        // --- ЛОГИКА ПЕРЕЗАРЯДКИ ---
+        function spawnBot(color, type, x, z) {
+            const geometry = new THREE.CylinderGeometry(0.5, 0.5, 1.8, 16);
+            const material = new THREE.MeshStandardMaterial({ color: color });
+            const bot = new THREE.Mesh(geometry, material);
+            
+            bot.position.set(x, 0.9, z); // Высота цилиндра
+            bot.userData = { type: type, hp: 100 }; // Данные бота
+            
+            scene.add(bot);
+            bots.push(bot);
+        }
+
+        function shoot() {
+            if(isReloading || ammo <= 0 || !weapon) return;
+            
+            ammo--;
+            document.getElementById('ammo-val').innerText = ammo;
+
+            // Анимация отдачи
+            weapon.position.z += 0.2;
+            weapon.rotation.z += 0.05;
+            
+            // Создание пули
+            if(bulletModel) {
+                const bullet = bulletModel.clone();
+                // Ставим пулю на позицию камеры (из глаз)
+                bullet.position.copy(camera.position);
+                // Сдвигаем чуть вперед и вправо (типа из ствола)
+                bullet.position.add(camera.getWorldDirection(new THREE.Vector3()).multiplyScalar(1.0));
+                
+                // Направление полета
+                bullet.userData.velocity = camera.getWorldDirection(new THREE.Vector3()).multiplyScalar(2.0); // Скорость
+                
+                // Поворот пули по направлению камеры
+                bullet.quaternion.copy(camera.quaternion);
+
+                scene.add(bullet);
+                bullets.push(bullet);
+            }
+        }
+
         function reload() {
-            if (isReloading || ammo === MAX_MAGAZINE) return;
-
+            if(isReloading) return;
             isReloading = true;
-            document.getElementById('ammo-icon').innerText = "RELOADING...";
-            document.getElementById('ammo-box').style.color = "red";
+            document.getElementById('ammo-val').innerText = "--";
+            
+            // Опускаем оружие
+            if(weapon) weapon.rotation.x = -1;
 
-            // Таймер перезарядки (2 секунды)
             setTimeout(() => {
-                ammo = MAX_MAGAZINE;
+                ammo = 30;
                 isReloading = false;
-                updateAmmoUI();
-                document.getElementById('ammo-box').style.color = "#ffcc00";
+                document.getElementById('ammo-val').innerText = 30;
+                if(weapon) weapon.rotation.x = 0;
             }, 2000);
         }
 
-        function updateAmmoUI() {
-            document.getElementById('current-ammo').innerText = ammo;
-            document.getElementById('ammo-icon').innerText = "|||";
-        }
-
-        // --- КЛАВИШИ ---
-        function onKeyDown(e) {
+        function onKey(e, isDown) {
             switch (e.code) {
-                case 'KeyW': moveForward = true; break;
-                case 'KeyA': moveLeft = true; break;
-                case 'KeyS': moveBackward = true; break;
-                case 'KeyD': moveRight = true; break;
-                case 'KeyR': reload(); break; // Кнопка R
-            }
-        }
-        function onKeyUp(e) {
-            switch (e.code) {
-                case 'KeyW': moveForward = false; break;
-                case 'KeyA': moveLeft = false; break;
-                case 'KeyS': moveBackward = false; break;
-                case 'KeyD': moveRight = false; break;
+                case 'KeyW': moveForward = isDown; break;
+                case 'KeyA': moveLeft = isDown; break;
+                case 'KeyS': moveBackward = isDown; break;
+                case 'KeyD': moveRight = isDown; break;
             }
         }
 
-        function onResize() {
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
-        }
-
-        // --- ГЛАВНЫЙ ЦИКЛ (АНИМАЦИЯ) ---
         function animate() {
             requestAnimationFrame(animate);
 
             const time = performance.now();
-            
             if (controls.isLocked) {
                 const delta = (time - prevTime) / 1000;
 
-                // Физика движения
+                // Движение игрока
                 velocity.x -= velocity.x * 10.0 * delta;
                 velocity.z -= velocity.z * 10.0 * delta;
                 direction.z = Number(moveForward) - Number(moveBackward);
                 direction.x = Number(moveRight) - Number(moveLeft);
                 direction.normalize();
 
-                if (moveForward || moveBackward) velocity.z -= direction.z * 100.0 * delta;
-                if (moveLeft || moveRight) velocity.x -= direction.x * 100.0 * delta;
+                if (moveForward || moveBackward) velocity.z -= direction.z * 50.0 * delta; // Скорость CS
+                if (moveLeft || moveRight) velocity.x -= direction.x * 50.0 * delta;
 
                 controls.moveRight(-velocity.x * delta);
                 controls.moveForward(-velocity.z * delta);
 
-                // АНИМАЦИЯ ОРУЖИЯ
-                if (weapon) {
-                    if (isReloading) {
-                        // Анимация перезарядки (Опускаем оружие вниз)
-                        // Плавный поворот вниз
-                        weapon.rotation.x = THREE.MathUtils.lerp(weapon.rotation.x, -1.0, 0.1);
-                    } else {
-                        // Возврат в нормальное положение
-                        weapon.rotation.x = THREE.MathUtils.lerp(weapon.rotation.x, 0, 0.1);
-                        weapon.rotation.z = THREE.MathUtils.lerp(weapon.rotation.z, 0, 0.1); // Гасим боковой наклон отдачи
+                // Логика Пуль
+                for (let i = bullets.length - 1; i >= 0; i--) {
+                    const b = bullets[i];
+                    b.position.add(b.userData.velocity); // Летит вперед
 
-                        // Плавный возврат после отдачи (position)
-                        weapon.position.z = THREE.MathUtils.lerp(weapon.position.z, weaponBasePos.z, 0.1);
-                        weapon.position.y = THREE.MathUtils.lerp(weapon.position.y, weaponBasePos.y, 0.1);
-
-                        // Анимация ходьбы (раскачивание)
-                        if (moveForward || moveBackward || moveLeft || moveRight) {
-                            weapon.position.x = weaponBasePos.x + Math.cos(time * 0.01) * 0.02;
-                            weapon.position.y = weaponBasePos.y + Math.sin(time * 0.02) * 0.02;
+                    // Проверка попаданий
+                    for (let j = bots.length - 1; j >= 0; j--) {
+                        const bot = bots[j];
+                        // Простая проверка дистанции (попал или нет)
+                        if (b.position.distanceTo(bot.position) < 1.0) {
+                            scene.remove(bot); // Удаляем бота
+                            bots.splice(j, 1);
+                            scene.remove(b);   // Удаляем пулю
+                            bullets.splice(i, 1);
+                            break; // Выход из цикла ботов
                         }
                     }
-                    
-                    // Возврат камеры на место (гашение отдачи)
-                    camera.rotation.x = THREE.MathUtils.lerp(camera.rotation.x, 0, 0.05);
+
+                    // Удаление пули если улетела далеко
+                    if (b.position.distanceTo(camera.position) > 100) {
+                        scene.remove(b);
+                        bullets.splice(i, 1);
+                    }
+                }
+
+                // Возврат оружия после отдачи
+                if(weapon && !isReloading) {
+                    weapon.position.z = THREE.MathUtils.lerp(weapon.position.z, WEAPON_POS.z, 0.2);
+                    weapon.rotation.z = THREE.MathUtils.lerp(weapon.rotation.z, 0, 0.2);
                 }
             }
             prevTime = time;
